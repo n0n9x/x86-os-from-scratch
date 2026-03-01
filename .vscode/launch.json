@@ -1,0 +1,25 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Kernel",
+            "type": "cppdbg",
+            "request": "launch",
+            "targetArchitecture": "x86",
+            "program": "${workspaceFolder}/myos.bin", // 替换为你编译出的可执行文件
+            "miDebuggerServerAddress": "localhost:1234",
+            "miDebuggerPath": "C:/msys64/mingw64/bin/gdb.exe", // 或者你的交叉编译 gdb
+            "stopAtEntry": true,
+            "cwd": "${workspaceFolder}",
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable remote indexing",
+                    "text": "set architecture i386",
+                    "ignoreFailures": false
+                }
+            ]
+        }
+    ]
+}

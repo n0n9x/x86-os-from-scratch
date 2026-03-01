@@ -1,0 +1,19 @@
+{
+    "configurations": [
+        {
+            "name": "OSDev",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "C:/msys64/home/N0ne/opt/cross/lib/gcc/i686-elf/12.2.0/include" 
+            ],
+            "defines": [],
+            "compilerPath": "C:/msys64/home/N0ne/opt/cross/bin/i686-elf-gcc.exe",
+            "cStandard": "gnu99",
+            "intelliSenseMode": "linux-gcc-x86",
+            "compilerArgs": [
+                "-ffreestanding"
+            ]
+        }
+    ],
+    "version": 4
+}
