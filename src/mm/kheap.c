@@ -23,8 +23,10 @@ void *kmalloc(size_t size)
     size = (size + 7) & ~7; // 8字节对齐
     header_t *curr = heap_first;
 
+    //首次适应法
     while (curr)
     {
+        //寻找合适的块（空闲、空间足够大）
         if (curr->is_free && curr->size >= size && curr->size > 0)
         {
             // 如果剩余空间足够大，切分出一个新块
@@ -49,7 +51,7 @@ void *kmalloc(size_t size)
         curr = curr->next;
     }
 
-    // 2. 堆末尾扩展 (注意维护 prev)
+    // 2. 没有合适的块，进行堆末尾扩展 (注意维护 prev)
     header_t *new_node;
     if (curr == heap_first && curr->size == 0)
     {

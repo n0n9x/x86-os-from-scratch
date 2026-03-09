@@ -22,5 +22,6 @@ void syscall_handler(registers_t *regs);
 #define SYS_FLIST 12
 #define SYS_MKDIR 13
 #define SYS_SHUTDOWN 14
+#define SYS_EXEC 15
 
 #endif

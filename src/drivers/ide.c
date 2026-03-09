@@ -15,8 +15,11 @@ uint32_t ide_get_sectors() {
 }
 
 // 检查磁盘是否忙碌
-static void ide_wait_ready() {
+static void ide_wait_busy() {
     while (inb(IDE_PRIMARY_BASE + IDE_REG_STATUS) & IDE_STATUS_BSY);
+}
+static void ide_wait_ready(){
+    while (!(inb(IDE_PRIMARY_BASE + IDE_REG_STATUS) & IDE_STATUS_DRQ));
 }
 
 void ide_init() {
@@ -25,7 +28,7 @@ void ide_init() {
 
 // 读取一个扇区的框架
 void ide_read_sector(uint32_t lba, uint8_t *buf) {
-    ide_wait_ready();
+    ide_wait_busy();
 
     // 1. 设置扇区数量和 LBA 地址
     outb(IDE_PRIMARY_BASE + IDE_REG_SEC_COUNT, 1);
@@ -40,10 +43,11 @@ void ide_read_sector(uint32_t lba, uint8_t *buf) {
     outb(IDE_PRIMARY_BASE + IDE_REG_STATUS, IDE_CMD_READ);
 
     //3.阻塞当前进程
-    current_task->state = TASK_WAIT; 
-    task_add_to_queue(&disk_wait_queue, current_task);
-    schedule(); 
-    while (!(inb(IDE_PRIMARY_BASE + IDE_REG_STATUS) & IDE_STATUS_DRQ));
+    // current_task->state = TASK_WAIT; 
+    // task_add_to_queue(&disk_wait_queue, current_task);
+    // schedule(); 
+    ide_wait_ready();
+
     // 4. 被唤醒后，从数据端口读取 512 字节 (256个16位字)
     for (int i = 0; i < 256; i++) {
         uint16_t data = inw(IDE_PRIMARY_BASE + IDE_REG_DATA);
@@ -53,7 +57,7 @@ void ide_read_sector(uint32_t lba, uint8_t *buf) {
 
 // 写入一个扇区 (LBA模式)
 void ide_write_sector(uint32_t lba, uint8_t *buf) {
-    ide_wait_ready();
+    ide_wait_busy();
 
     outb(IDE_PRIMARY_BASE + IDE_REG_SEC_COUNT, 1);
     outb(IDE_PRIMARY_BASE + IDE_REG_LBA_LOW,  (uint8_t)lba);
@@ -65,7 +69,7 @@ void ide_write_sector(uint32_t lba, uint8_t *buf) {
     outb(IDE_PRIMARY_BASE + IDE_REG_STATUS, IDE_CMD_WRITE);
 
     // 必须等待硬件准备好接收数据
-    while (!(inb(IDE_PRIMARY_BASE + IDE_REG_STATUS) & IDE_STATUS_DRQ));
+    ide_wait_ready();
 
     // 发送数据
     uint16_t *ptr = (uint16_t *)buf;
@@ -74,12 +78,12 @@ void ide_write_sector(uint32_t lba, uint8_t *buf) {
     }
 
     // 等待写操作落盘完成
-    ide_wait_ready();
+    ide_wait_busy();
 
     // 如果你有进程调度，在这里等待中断
-    current_task->state = TASK_WAIT;
-    task_add_to_queue(&disk_wait_queue, current_task);
-    schedule();
+    // current_task->state = TASK_WAIT;
+    // task_add_to_queue(&disk_wait_queue, current_task);
+    // schedule();
 }
 
 // 硬盘中断处理程序 (IRQ 14)
@@ -92,12 +96,12 @@ void ide_handler() {
     task_wakeup(&disk_wait_queue);
 }
 
+//识别并获取IDE硬盘信息
 void ide_identify() {
     // 1. 选择主盘 (Master)
     outb(IDE_PRIMARY_BASE + IDE_REG_DEVICE, 0xA0);
     
-    
-    // 2. 发送命令前先清空参数寄存器（良好的习惯）
+    // 2. 发送命令前先清空参数寄存器
     outb(IDE_PRIMARY_BASE + IDE_REG_SEC_COUNT, 0);
     outb(IDE_PRIMARY_BASE + IDE_REG_LBA_LOW, 0);
     outb(IDE_PRIMARY_BASE + IDE_REG_LBA_MID, 0);
@@ -114,19 +118,19 @@ void ide_identify() {
     }
 
     // 5. 等待 BSY 清除并检查是否有错误发生
-    while (inb(IDE_PRIMARY_BASE + IDE_REG_STATUS) & IDE_STATUS_BSY);
+    ide_wait_busy();//只要磁盘忙，就等待
     
     // 再次检查状态，确保没有 ERR 位
     status = inb(IDE_PRIMARY_BASE + IDE_REG_STATUS);
     if (status & IDE_STATUS_ERR) {
-        //terminal_writestring("IDE Identify Error.\n");
+        terminal_writestring("IDE Identify Error.\n");
         return;
     }
 
     // 等待数据请求就绪 (DRQ)
-    while (!(inb(IDE_PRIMARY_BASE + IDE_REG_STATUS) & IDE_STATUS_DRQ));
+    ide_wait_ready();//只要磁盘未准备就绪，就等
 
-    // 6. 读取 256 个字 (512 字节)
+    // 6. 读取 256 个字 (512 字节 一个扇区)
     uint16_t data[256] = {0};
     for (int i = 0; i < 256; i++) {
         data[i] = inw(IDE_PRIMARY_BASE + IDE_REG_DATA);

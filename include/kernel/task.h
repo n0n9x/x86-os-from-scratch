@@ -7,10 +7,11 @@
 // 进程状态
 typedef enum
 {
-    TASK_RUNNING, // 运行
-    TASK_READY,   // 就绪
-    TASK_ZOMBIE,  // 死亡
-    TASK_WAIT,    // 阻塞
+    TASK_RUNNING,  // 运行
+    TASK_READY,    // 就绪
+    TASK_ZOMBIE,   // 死亡
+    TASK_WAIT,     // 键盘阻塞
+    TASK_WAITING,  // 等待子进程退出
 } task_state_t;
 
 // 进程切换的上下文
@@ -36,6 +37,7 @@ typedef struct task
     uint32_t heap_end;   // 当前堆的结束虚拟地址 (brk 指针)
     int32_t ticks_left;  // 当前任务剩余的时间片
     struct task *next;
+    struct task *parent; // 父进程，用于子进程退出时唤醒
 } task_t;
 
 extern task_t *current_task;
@@ -48,8 +50,7 @@ extern uint32_t DEFAULT_TIME_SLICE;
 void task_init();
 void schedule();
 task_t *create_task(void (*entry)(void));  // 内核态进程
-task_t *create_user_task(void (*entry)()); // 用户态进程
-task_t *create_user_task_from_elf(uint32_t entry, uint32_t cr3_phys);
+task_t *create_user_task_from_elf(uint32_t entry, uint32_t cr3_phys, task_t *parent);
 void kernel_task_exit();
 void task_tick();
 void task_add_to_queue(task_t **queue, task_t *task);

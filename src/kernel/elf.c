@@ -23,25 +23,30 @@ static inline void set_cr3(uint32_t val)
 
 int load_elf(const char *path)
 {
+    return (load_elf_with_args(path, NULL, 0) != NULL) ? 0 : -1;
+}
+
+struct task *load_elf_with_args(const char *path, char **argv, int argc)
+{
     fat_dirent_t dirent;
     if (fat_path_to_dirent(path, &dirent, NULL, NULL) != 0)
-        return -1;
+        return NULL;
 
     uint8_t *elf_buf = (uint8_t *)kmalloc(dirent.file_size);
-    if (fat_read_file(path, elf_buf, dirent.file_size) != 0)
-        return -1;
-
+    if (fat_read_file(path, elf_buf, dirent.file_size) < 0)
+        return NULL;
 
     elf_header_t *header = (elf_header_t *)elf_buf;
+
     if (*(uint32_t *)header->e_ident != ELF_MAGIC)
-        return -2;
+        return NULL;
 
     // 1. 分配用户页目录
     uint32_t new_cr3_phys = (uint32_t)pmm_alloc_block();
     pde_t *v_pdir = (pde_t *)PHYS_TO_VIRT(new_cr3_phys);
     memset(v_pdir, 0, 4096);
 
-    // 2. 加载ELF段
+    // 2. 加载 ELF 段
     elf_phdr_t *phdr = (elf_phdr_t *)(elf_buf + header->e_phoff);
     for (int i = 0; i < header->e_phnum; i++)
     {
@@ -49,7 +54,7 @@ int load_elf(const char *path)
             continue;
 
         uint32_t start = phdr[i].p_vaddr & 0xFFFFF000;
-        uint32_t end = phdr[i].p_vaddr + phdr[i].p_memsz;
+        uint32_t end   = phdr[i].p_vaddr + phdr[i].p_memsz;
 
         for (uint32_t vaddr = start; vaddr < end; vaddr += 4096)
         {
@@ -60,30 +65,28 @@ int load_elf(const char *path)
 
         if (phdr[i].p_filesz > 0)
         {
-            uint32_t src_off = phdr[i].p_offset;
+            uint32_t src_off  = phdr[i].p_offset;
             uint32_t dst_vaddr = phdr[i].p_vaddr;
             uint32_t remaining = phdr[i].p_filesz;
 
             while (remaining > 0)
             {
-                uint32_t pt_phys = v_pdir[dst_vaddr >> 22] & 0xFFFFF000;
-                uint32_t *pt = (uint32_t *)PHYS_TO_VIRT(pt_phys);
+                uint32_t pt_phys  = v_pdir[dst_vaddr >> 22] & 0xFFFFF000;
+                uint32_t *pt      = (uint32_t *)PHYS_TO_VIRT(pt_phys);
                 uint32_t page_phys = pt[(dst_vaddr >> 12) & 0x3FF] & 0xFFFFF000;
-                uint32_t page_off = dst_vaddr & 0xFFF;
-                uint32_t chunk = 4096 - page_off;
-
-                if (chunk > remaining)
-                    chunk = remaining;
+                uint32_t page_off  = dst_vaddr & 0xFFF;
+                uint32_t chunk     = 4096 - page_off;
+                if (chunk > remaining) chunk = remaining;
                 memcpy((void *)(PHYS_TO_VIRT(page_phys) + page_off),
                        elf_buf + src_off, chunk);
-
-                dst_vaddr += chunk;
-                src_off += chunk;
-                remaining -= chunk;
+                dst_vaddr  += chunk;
+                src_off    += chunk;
+                remaining  -= chunk;
             }
         }
     }
-    // 3. 用户栈
+
+    // 3. 用户栈：分配两页
     uint32_t ustack_phys1 = (uint32_t)pmm_alloc_block();
     uint32_t ustack_phys2 = (uint32_t)pmm_alloc_block();
     map_page(v_pdir, 0xBFFFE000, ustack_phys1, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
@@ -91,28 +94,62 @@ int load_elf(const char *path)
     memset((void *)PHYS_TO_VIRT(ustack_phys1), 0, 4096);
     memset((void *)PHYS_TO_VIRT(ustack_phys2), 0, 4096);
 
+    // 4. 在用户栈上布置 argc/argv
+    //    使用第一页（0xBFFFE000）的内核虚拟地址来写入数据
+    //    用户态 esp 最终指向 0xBFFFE000 处的 argc
+    uint8_t *stack_page = (uint8_t *)PHYS_TO_VIRT(ustack_phys1);
 
-    // 4. 同步内核PDE
+    // 把 argv 字符串写入栈页顶部（从高地址往下）
+    // 布局（用户虚拟地址视角，0xBFFFE000 起）：
+    //   [0x000] argc
+    //   [0x004] argv[0] 指针
+    //   [0x008] argv[1] 指针
+    //   ...
+    //   [0x004*(argc+1)] NULL 哨兵
+    //   [字符串区] arg 字符串们（从页顶往下增长）
+    int real_argc = argc;
+    if (real_argc <= 0 || argv == NULL)
+    {
+        // 没有参数时，argv[0] 设为路径本身
+        real_argc = 1;
+    }
+
+    // 字符串写入区：从页末尾往前写
+    uint32_t str_off = 4096; // 从页末尾开始（用户虚拟地址 0xBFFFF000）
+    uint32_t ptr_arr[32];    // 最多 32 个参数，存每个字符串的用户虚拟地址
+    uint32_t str_base_uva = 0xBFFFE000; // 用户虚拟地址基址
+
+    for (int i = real_argc - 1; i >= 0; i--)
+    {
+        const char *s = (i == 0 && (argv == NULL || argc <= 0)) ? path : argv[i];
+        int len = 0;
+        while (s[len]) len++;
+        len++;
+        str_off -= len;
+        memcpy(stack_page + str_off, s, len);
+        ptr_arr[i] = str_base_uva + str_off;
+    }
+
+    uint32_t *sp = (uint32_t *)stack_page;
+    sp[0] = (uint32_t)real_argc;
+    for (int i = 0; i < real_argc; i++)
+        sp[1 + i] = ptr_arr[i];
+    sp[1 + real_argc] = 0;
+
+    // 5. 同步内核 PDE
     extern pde_t kernel_page_directory[];
     for (int i = 768; i < 1024; i++)
-    {
         if (kernel_page_directory[i] & PAGE_PRESENT)
-        {
             v_pdir[i] = kernel_page_directory[i];
-        }
-    }
 
-    // 5. 创建任务
-    create_user_task_from_elf(header->e_entry, new_cr3_phys);
+    // 6. 创建任务（初始 esp = 0xBFFFE000，指向 argc），parent 由 sys_exec 设置
+    task_t *t = create_user_task_from_elf(header->e_entry, new_cr3_phys, NULL);
 
-    // 6. 创建任务后再同步一次（kmalloc可能触发新映射）
+    // 7. 创建任务后再同步一次内核 PDE
     for (int i = 768; i < 1024; i++)
-    {
         if (kernel_page_directory[i] & PAGE_PRESENT)
-        {
             v_pdir[i] = kernel_page_directory[i];
-        }
-    }
 
-    return 0;
+    kfree(elf_buf);
+    return t;
 }

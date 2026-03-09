@@ -26,6 +26,7 @@ idt_ptr_t   idt_ptr;
 // 汇编实现的函数，用于加载 IDT
 extern void idt_flush(uint32_t);
 
+// num中断号 base中断处理程序地址 sel段选择子 flags标志位
 static void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags) {
     idt_entries[num].base_lo = base & 0xFFFF;
     idt_entries[num].base_hi = (base >> 16) & 0xFFFF;
@@ -35,6 +36,7 @@ static void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags
     idt_entries[num].flags   = flags;
 }
 
+//各个中断处理程序
 extern void isr0();
 extern void isr1();
 extern void isr2();
@@ -51,7 +53,7 @@ extern void isr12();   // 12: 栈段故障（CPU 自动压入错误码）
 extern void isr13();   // 13: 通用保护故障（CPU 自动压入错误码）
 extern void isr14();   // 14: 页故障（CPU 自动压入错误码，核心异常）
 
-// 保留/其他异常中断（15-31）
+// 保留/其他异常中断处理程序（15-31）
 extern void isr15();   // 15: 保留
 extern void isr16();   // 16: 浮点异常
 extern void isr17();   // 17: 对齐检查异常

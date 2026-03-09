@@ -19,6 +19,7 @@ unsigned char kbd_us_shift[128] = {
 static char kbd_buffer[KBD_BUF_SIZE];
 static int kbd_head = 0, kbd_tail = 0;
 static int shift_active = 0;
+static int ctrl_active  = 0;
 
 // 行缓冲区，用于存放尚未按回车的字符
 static char line_buffer[KBD_BUF_SIZE];
@@ -71,10 +72,25 @@ void keyboard_handler_main()
     case 0xB6: // 右 Shift 松开
         shift_active = 0;
         break;
+    case 0x1D: // 左 Ctrl 按下
+        ctrl_active = 1;
+        break;
+    case 0x9D: // 左 Ctrl 松开
+        ctrl_active = 0;
+        break;
     default:
         // 过滤掉其他按键的松开事件 (Break Code)
         if (scancode & 0x80)
             break;
+
+        // Ctrl+C：发送 0x03，立即唤醒进程
+        if (ctrl_active && scancode == 0x2E) // 'c' 的扫描码
+        {
+            line_pos = 0;
+            kbd_enqueue(0x03);
+            task_wakeup(&wait_queue);
+            break;
+        }
 
         // 处理按下事件 (Make Code)
         if (scancode < 128)

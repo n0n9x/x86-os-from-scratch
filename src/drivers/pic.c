@@ -1,5 +1,6 @@
 #include <drivers/pic.h>
 
+// PIC 8259A PIC芯片
 void pic_remap()
 {
     // 保存当前的屏蔽位

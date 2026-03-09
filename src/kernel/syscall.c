@@ -8,19 +8,24 @@
 #include <fs/fat.h>
 #include <drivers/io.h>
 
-void sys_print(char *s) {
+void sys_print(char *s)
+{
     terminal_writestring(s);
 }
 
 void sys_exit(int exit_code)
 {
     (void)exit_code;
-    // 1. 简单打印一下信息用于调试
     terminal_writestring("\n[Task Exited]\n");
 
-    // 2. 标记当前任务为“死亡”状态
-    current_task->state = TASK_ZOMBIE;
+    // 唤醒父进程
+    if (current_task->parent && current_task->parent->state == TASK_WAITING)
+    {
+        current_task->parent->state = TASK_READY;
+        task_add_to_queue(&ready_queue, current_task->parent);
+    }
 
+    current_task->state = TASK_ZOMBIE;
     schedule();
     while (1)
         ;
@@ -43,7 +48,10 @@ void *sys_sbrk(int increment)
     {
         // 计算需要映射的页范围
         // 确保从 old_brk 所在的页开始，映射到 new_brk 覆盖的所有页
-        uint32_t start_page = old_brk & 0xFFFFF000;
+        // 只映射真正新增的页
+        // old_brk 所在的页（old_brk & ~0xFFF）可能已经映射过了，跳过它
+        uint32_t old_page = old_brk & 0xFFFFF000;
+        uint32_t start_page = (old_brk == old_page) ? old_page : old_page + 4096;
         uint32_t end_page = (new_brk + 4095) & 0xFFFFF000;
 
         // 【核心修改】：在高半核模式下，cr3 是物理地址，必须转为虚拟地址才能由内核读写
@@ -154,24 +162,76 @@ int sys_read(int fd, char *buf, uint32_t count)
             break;
 
         buf[i++] = c;
+
+        // Ctrl+C：立即返回，不等换行
+        if (c == 0x03)
+            break;
+
         if (c == '\n')
             break;
     }
     return i;
 }
 
-static void sys_flist(const char *path) {
+static void sys_flist(const char *path)
+{
     fat_list_files(path);
 }
 
 static int sys_mkdir(const char *path)
 {
-    if (!path) return -1;
+    if (!path)
+        return -1;
     return fat_mkdir(path); // 调用 fat.c 中的实现
 }
 
-void sys_shutdown() {
-    outw(0x604, 0x2000); 
+void sys_shutdown()
+{
+    outw(0x604, 0x2000);
+    outw(0xB004, 0x2000);
+    outw(0x4004, 0x3400);
+    for (;;)
+        asm volatile("hlt");
+}
+
+static int sys_exec(const char *path, char **user_argv, int argc)
+{
+    extern task_t *load_elf_with_args(const char *path, char **argv, int argc);
+
+// 把用户态的 argv 字符串全部复制到内核缓冲区
+// 避免 load_elf_with_args 执行过程中用户栈被切换或失效
+#define MAX_EXEC_ARGS 16
+#define MAX_ARG_LEN 256
+    static char arg_bufs[MAX_EXEC_ARGS][MAX_ARG_LEN];
+    static char *kargv[MAX_EXEC_ARGS + 1];
+
+    if (argc <= 0 || argc > MAX_EXEC_ARGS)
+        argc = 1;
+
+    // 复制每个参数字符串到内核静态缓冲区
+    for (int i = 0; i < argc; i++)
+    {
+        const char *src = (user_argv && user_argv[i]) ? user_argv[i] : path;
+        int j = 0;
+        while (src[j] && j < MAX_ARG_LEN - 1)
+        {
+            arg_bufs[i][j] = src[j];
+            j++;
+        }
+        arg_bufs[i][j] = '\0';
+        kargv[i] = arg_bufs[i];
+    }
+    kargv[argc] = NULL;
+
+    task_t *child = load_elf_with_args(kargv[0], kargv, argc);
+    if (!child) return -1;
+
+    // 设置父子关系，阻塞当前任务等待子进程退出
+    child->parent = current_task;
+    current_task->state = TASK_WAITING;
+    schedule();
+
+    return 0;
 }
 
 static void *syscalls[] = {
@@ -188,8 +248,9 @@ static void *syscalls[] = {
     [SYS_FDELETE] = (void *)sys_fdelete,
     [SYS_FAPPEND] = (void *)sys_fappend,
     [SYS_FLIST] = (void *)sys_flist,
-    [SYS_MKDIR]   = (void *)sys_mkdir,
-    [SYS_SHUTDOWN]=(void* )sys_shutdown,
+    [SYS_MKDIR] = (void *)sys_mkdir,
+    [SYS_SHUTDOWN] = (void *)sys_shutdown,
+    [SYS_EXEC] = (void *)sys_exec,
 };
 
 // 3. 分发器
@@ -242,9 +303,7 @@ void syscall_handler(registers_t *regs)
     }
     else if (num == SYS_FWRITE)
     {
-        int (*func)(const char *, uint8_t *, uint32_t) = (int (*)(const char *, uint8_t *, uint32_t))handler;
-        // ebx=文件名, ecx=数据, edx=长度
-        regs->eax = func((char *)regs->ebx, (uint8_t *)regs->ecx, regs->edx);
+        regs->eax = fat_write_file_at((char *)regs->ebx, (uint8_t *)regs->ecx, regs->edx, regs->esi);
     }
     else if (num == SYS_FCREATE)
     {
@@ -265,14 +324,24 @@ void syscall_handler(registers_t *regs)
     {
         void (*func)(const char *) = (void (*)(const char *))handler;
         func((const char *)regs->ebx);
-    }else if (num == SYS_MKDIR)
+    }
+    else if (num == SYS_MKDIR)
     {
         int (*func)(const char *) = (int (*)(const char *))handler;
         // ebx 存储的是用户传进来的路径字符串指针
         regs->eax = func((const char *)regs->ebx);
-    }else if (num == SYS_SHUTDOWN)
+    }
+    else if (num == SYS_SHUTDOWN)
     {
         sys_shutdown();
     }
+    else if (num == SYS_EXEC)
+    {
+        // ebx=path, ecx=argv指针数组, edx=argc
+        int (*func)(const char *, char **, int) =
+            (int (*)(const char *, char **, int))handler;
+        regs->eax = func((const char *)regs->ebx,
+                         (char **)regs->ecx,
+                         (int)regs->edx);
+    }
 }
-

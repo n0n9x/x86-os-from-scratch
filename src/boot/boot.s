@@ -1,5 +1,5 @@
 ; 符合 Multiboot 标准的引导程序
-; 这样我们可以直接用 GRUB 或 QEMU 加载它
+; 这样可以直接用 GRUB 或 QEMU 加载它
 
 ; 定义常量
 MBALIGN  equ  1 << 0            ; 内存对齐
@@ -15,17 +15,20 @@ align 4
     dd FLAGS
     dd CHECKSUM
 
-; --- 核心修改：定义临时页表 ---
+; --- 定义临时页目录表 ---
 section .data
 align 4096
 boot_page_directory:
     ; 第 0 项：身份映射 (0..4MB -> 0..4MB)
     dd (boot_page_table1 - 0xC0000000 + 0x003) 
+    ; 其余项都先填0
     times (768 - 1) dd 0
     ; 第 768 项：内核映射 (3GB..3GB+4MB -> 0..4MB)
     dd (boot_page_table1 - 0xC0000000 + 0x003)
+    ; 其余项先填0
     times (1024 - 768 - 1) dd 0
-
+    ; boot_page_table1的地址是虚拟地址高地址，减去0xC0000000得到物理地址
+; 定义临时页表
 boot_page_table1:
     %assign i 0
     %rep 1024
@@ -33,13 +36,18 @@ boot_page_table1:
         %assign i i+1
     %endrep
 
-; 定义栈空间（内核运行需要栈）
+; 定义栈空间
 section .bss
 align 16
 stack_bottom:
     resb 16384 ; 16 KB 栈空间
 global stack_top   
 stack_top:
+;   高地址
+;   stack_top
+;   16KB
+;   stack_bottom
+;   低地址
 
 ; 内核入口点
 section .text
@@ -54,15 +62,16 @@ _start:
     or ecx, 0x80000000
     mov cr0, ecx
 
-    ; 3. 此时 EIP 还在低地址，我们需要一个长跳转进入高地址执行
+    ; 3. 此时 EIP 存放物理地址，进行一个长跳转进入高地址执行
     lea ecx, [.higher_half]
     jmp ecx
+    ; 现在EIP存放虚拟地址
 
 .higher_half:
-    ; 4. 现在已经在 0xC0000000 以上运行了！设置高地址栈
+    ; 4. 现在已经在 0xC0000000 以上运行。设置高地址栈
     mov esp, stack_top
 
-    ; 5. 调用 C
+    ; 5. 调用 C，进入kernel_main函数
     extern kernel_main
     call kernel_main
 
@@ -74,14 +83,20 @@ global gdt_flush    ; 导出函数给 C 语言调用
 gdt_flush:
     mov eax, [esp+4]
     lgdt [eax]
-    jmp 0x08:.next    ; 必不可少！刷新 CS 缓存
+    jmp 0x08:.next    ; 长跳转 刷新 CS 缓存
 .next:
-    mov ax, 0x10
+    mov ax, 0x10 ; 内核数据段，可读写
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     mov ss, ax
+    ret
+
+global tss_flush
+tss_flush:
+    mov ax, 0x28      ; 注意：TSS 的选择子也需要设置 RPL 为 3
+    ltr ax            ; Load Task Register / TR寄存器，存TSS在GDT里的索引
     ret
 
 global idt_flush
@@ -90,24 +105,14 @@ idt_flush:
     lidt [eax]        ; 加载 IDT
     ret
 
-global tss_flush
-tss_flush:
-    mov ax, 0x28      ; TSS 在 GDT 中的索引是 5，(5 << 3) | 3 = 0x2B
-                      ; 注意：TSS 的选择子也需要设置 RPL 为 3
-    ltr ax            ; Load Task Register
-    ret
-
-
-
-; -----------------------------------ISR
-
+; ISR，CPU内部异常
 ; 宏：用于没有错误码的异常
 %macro ISR_NOERRCODE 1
   [global isr%1]        ; 显式使用方括号确保全局导出
   isr%1:
     cli
-    push dword 0
-    push dword %1
+    push dword 0    ;伪造错误码
+    push dword %1   ;压入中断号
     jmp isr_common_stub
 %endmacro
 
@@ -116,7 +121,7 @@ tss_flush:
   [global isr%1]
   isr%1:
     cli
-    push dword %1
+    push dword %1   ;已自动压入错误码，所以只压入中断号
     jmp isr_common_stub
 %endmacro
 
@@ -158,18 +163,30 @@ ISR_NOERRCODE 128
 ; 统一的中断处理入口
 extern isr_handler
 isr_common_stub:
-    pusha
+    pusha   ;压入EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI
     mov ax, ds
-    push eax ;保存旧数据
+    push eax ;保存旧数据段选择子
     mov ax, 0x10 ;进入内核数据段
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
 
-    push esp          ; 把当前栈顶地址作为参数传给 C 函数
+    ; esp + 48	ss	CPU 自动压入 (跨特权级时)
+    ; esp + 44	useresp	CPU 自动压入 (跨特权级时)
+    ; esp + 40	eflags	CPU 自动压入
+    ; esp + 36	cs	CPU 自动压入
+    ; esp + 32	eip	CPU 自动压入
+    ; esp + 28	err_code	宏压入 (或补位的 0)
+    ; esp + 24	int_no	宏压入
+    ; esp + 20	eax, ecx...	pusha 指令压入
+    ; ...	...	pusha 压入的其他寄存器
+    ; esp + 4	edi	pusha 压入的最后一个
+    ; esp (当前)	ds	你手动 push eax (保存的 ds)
+
+    push esp          ; 把当前栈顶地址作为参数传给 C 函数，此时esp指向registers_t结构体
     call isr_handler
-    add esp, 4        ; 清理压入的参数
+    add esp, 4        ; 清理压入的esp参数
 
     pop eax ;装回原来的旧段
     mov ds, ax
@@ -177,18 +194,18 @@ isr_common_stub:
     mov fs, ax
     mov gs, ax
     popa
-    add esp, 8
+    add esp, 8  ;清理 错误码和中断码
     iret ; 中断返回（弹出 CS, EIP, EFLAGS等）
 
 
-; -----------------------------------IRQ
+; IRQ，外部硬件设备中断
 
 %macro IRQ 2
   global irq%1
   irq%1:
     cli
-    push dword 0
-    push dword %2
+    push dword 0    ;伪造错误码
+    push dword %2   ;压入中断向量号
     jmp irq_common_stub
 %endmacro
 
@@ -201,7 +218,7 @@ extern schedule
 irq_common_stub:
     pusha                   ; 压入 8 个通用寄存器 (EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI)
     mov ax, ds
-    push eax                ; 保存原 DS 段选择子
+    push eax                ; 保存旧数据段选择子
 
     ; 加载内核数据段选择子 (0x10)
     mov ax, 0x10

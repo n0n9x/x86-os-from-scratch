@@ -39,5 +39,6 @@ typedef struct {
 
 // 加载 ELF 并运行的函数声明
 int load_elf(const char *filename);
+struct task *load_elf_with_args(const char *path, char **argv, int argc);
 
 #endif

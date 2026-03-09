@@ -4,13 +4,13 @@
 #include <kernel/gdt.h>
 #include <mm/pmm.h>
 
-task_t *current_task = NULL;
-task_t *ready_queue = NULL;
-task_t *wait_queue = NULL;
-task_t *disk_wait_queue = NULL; // 定义磁盘队列
+task_t *current_task = NULL;    // 当前进程
+task_t *ready_queue = NULL;     // 就绪进程队列
+task_t *wait_queue = NULL;      // 键盘阻塞队列
+task_t *disk_wait_queue = NULL; // 定义磁盘阻塞队列
 
-uint32_t next_pid = 1;
-uint32_t DEFAULT_TIME_SLICE = 10;
+uint32_t next_pid = 1;            // 进程id
+uint32_t DEFAULT_TIME_SLICE = 10; // 默认时间片
 
 task_t *create_task(void (*entry)())
 {
@@ -57,6 +57,7 @@ task_t *create_task(void (*entry)())
     t->esp = (uint32_t)stack;
     t->state = TASK_READY;
     t->next = NULL;
+    t->parent = NULL;
 
     // 加入就绪队列
     task_add_to_queue(&ready_queue, t);
@@ -66,81 +67,19 @@ task_t *create_task(void (*entry)())
 
 extern void user_task_exit();
 extern void first_return_from_kernel();
-task_t *create_user_task(void (*entry)())
+
+task_t *create_user_task_from_elf(uint32_t entry, uint32_t cr3_phys, task_t *parent)
 {
-    task_t *t = (task_t *)kmalloc(sizeof(task_t));
-    t->id = next_pid++; 
-
-    // 1. 关键：首先创建页目录并获取 cr3
-    // 这样接下来的 map_page 才有合法的页目录指针可以使用
-    t->cr3 = (pde_t *)vmm_create_user_directory();
-
-    // 2. 准备内核栈 (内核空间分配)
-    uint32_t kstack_mem = (uint32_t)kmalloc(4096);
-    uint32_t *kstack = (uint32_t *)(kstack_mem + 4096);
-
-    // 3. 准备用户栈 (3GB 以下虚拟空间)
-    void *ustack_phys = pmm_alloc_block(); 
-    uint32_t ustack_virt_top = 0xBFFFF000; // 用户栈虚拟地址顶端
-
-    // 映射物理页到该进程页表的 0xBFFFF000 处
-    // 权限：用户态(PAGE_USER)、可写(PAGE_WRITE)、存在(PAGE_PRESENT)
-    map_page((pde_t*)PHYS_TO_VIRT(t->cr3), ustack_virt_top - 4096, (uint32_t)ustack_phys, 0x07);
-
-    // --- [B] 准备用户栈内容 ---
-    // 核心：此时不能直接操作 0xBFFFF000，因为当前 cr3 还没切换。
-    // 我们必须通过内核映射后的虚拟地址来初始化这块物理内存。
-    uint32_t *u_ptr_kernel_view = (uint32_t *)PHYS_TO_VIRT((uint32_t)ustack_phys + 4096);
-    *(--u_ptr_kernel_view) = (uint32_t)user_task_exit; 
-
-    // --- [A] 压入 IRET 帧 (5个参数) ---
-    // 注意：用户态 ESP 填入的是用户空间的虚拟地址，且已经减去了压入返回地址的 4 字节
-    *(--kstack) = 0x23;                          // [4] SS (用户数据段)
-    *(--kstack) = ustack_virt_top - sizeof(uint32_t); // [3] ESP
-    *(--kstack) = 0x202;                         // [2] EFLAGS (IF=1)
-    *(--kstack) = 0x1B;                          // [1] CS (用户代码段)
-    *(--kstack) = (uint32_t)entry;               // [0] EIP
-
-    // --- 第二部分：数据段 (对应你的 first_return_from_kernel 弹出) ---
-    *(--kstack) = 0x23; // DS (赋给 ds, es, fs, gs)
-
-    // --- 第三部分：任务切换上下文 (匹配 switch_to_task) ---
-    extern void first_return_from_kernel();
-    *(--kstack) = (uint32_t)first_return_from_kernel;
-
-    // 严格对应汇编中的 pop edi, esi, ebx, ebp
-    *(--kstack) = 0; // edi
-    *(--kstack) = 0; // esi
-    *(--kstack) = 0; // ebx
-    *(--kstack) = 0; // ebp
-
-    // --- 4. 完善 PCB 信息 ---
-    t->esp = (uint32_t)kstack;
-    t->kstack = kstack_mem + 4096;
-    t->ustack = ustack_virt_top;  // 记录用户栈虚拟顶端
-    
-    t->heap_start = 0x400000;     // 用户堆起始地址
-    t->heap_end = 0x400000;
-    
-    t->state = TASK_READY;
-    t->next = NULL;
-
-    // 加入就绪队列
-    task_add_to_queue(&ready_queue, t);
-
-    return t;
-}
-
-task_t *create_user_task_from_elf(uint32_t entry, uint32_t cr3_phys) {
     task_t *t = (task_t *)kmalloc(sizeof(task_t));
     t->id = next_pid++;
     t->cr3 = (pde_t *)(uintptr_t)cr3_phys;
+    t->parent = parent;
 
     uint32_t kstack_base = (uint32_t)kmalloc(4096);
     uint32_t *kstack = (uint32_t *)(kstack_base + 4096);
 
     *(--kstack) = 0x23;
-    *(--kstack) = 0xBFFFF000;
+    *(--kstack) = 0xBFFFE000; // iret 恢复的用户态 esp，指向 argc（由 elf.c 布置）
     *(--kstack) = 0x202;
     *(--kstack) = 0x1B;
     *(--kstack) = entry;
@@ -153,7 +92,10 @@ task_t *create_user_task_from_elf(uint32_t entry, uint32_t cr3_phys) {
 
     t->esp = (uint32_t)kstack;
     t->kstack = kstack_base + 4096;
-    t->ustack = 0xBFFFF000;
+    t->ustack = 0xBFFFE000;   // 用户栈底，argc 所在位置
+    t->heap_start = 0x400000; // 用户堆起始地址
+    t->heap_end = 0x400000;   // 初始 brk = 堆起始
+    t->ticks_left = DEFAULT_TIME_SLICE;
     t->state = TASK_READY;
     t->next = NULL;
     task_add_to_queue(&ready_queue, t);
@@ -191,7 +133,7 @@ void task_init()
     current_task->ticks_left = DEFAULT_TIME_SLICE;
     current_task->next = NULL;
 
-    // 注意：这里不要让 ready_queue = current_task!
+    // 就绪队列为空
     ready_queue = NULL;
 }
 
@@ -297,8 +239,11 @@ void schedule()
     }
     else if (prev->state == TASK_WAIT)
     {
-        // 如果是主动阻塞，加入等待队列
         task_add_to_queue(&wait_queue, prev);
+    }
+    else if (prev->state == TASK_WAITING)
+    {
+        // 不加入任何队列，靠子进程 sys_exit 时主动唤醒
     }
 
     // 3. 切换当前任务指针

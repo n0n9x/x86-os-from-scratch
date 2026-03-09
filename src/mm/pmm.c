@@ -6,15 +6,15 @@ static uint8_t bitmap[BITMAP_SIZE];
 static uint32_t total_blocks;
 
 // 初始化位图，将所有内存设为已用，后续根据内存图释放可用部分
-void pmm_init(uint32_t mem_size) {
+void pmm_init(uint32_t mem_size) {// mem_size  系统总共拥有的物理内存
     total_blocks = mem_size / PAGE_SIZE;
     memset(bitmap, 0xFF, BITMAP_SIZE); // 默认全占用（安全起见）
 }
 
 // 标记[base,base+size]的块为可用
 void pmm_init_region(uint32_t base, uint32_t size) {
-    uint32_t align = base / PAGE_SIZE;
-    uint32_t blocks = size / PAGE_SIZE;
+    uint32_t align = base / PAGE_SIZE;//    起始地址对应位图的第几个块
+    uint32_t blocks = size / PAGE_SIZE;//   这块区域总共跨越了多少个块
     for (; blocks > 0; blocks--) {
         uint32_t bit = align % 8;
         uint32_t byte = align / 8;
@@ -38,7 +38,7 @@ void* pmm_alloc_block() {
     return NULL; // 内存耗尽
 }
 
-// 释放物理页框
+// 释放一个物理页框
 void pmm_free_block(void* addr) {
     uint32_t block = (uint32_t)addr / PAGE_SIZE;
     bitmap[block / 8] &= ~(1 << (block % 8));

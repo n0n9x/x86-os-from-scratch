@@ -37,7 +37,7 @@ void write_tss(int32_t num, uint16_t ss0, uint32_t esp0) {
     gdt_set_gate(num, base, limit, 0x89, 0x00);
 
     tss_entry.ss0  = ss0;  // 0x10
-    tss_entry.esp0 = esp0; // 初始内核栈顶
+    tss_entry.esp0 = esp0; // 初始内核栈顶   TSS始终存放当前进程的内核栈
     
     // 修正 3: iomap_base 必须指向 TSS 之外，表示没有 IO 位图
     tss_entry.iomap_base = sizeof(tss_entry); 
@@ -53,12 +53,12 @@ void init_gdt() {
     gdt_set_gate(3, 0, 0xFFFFFFFF, 0xFA, 0xCF); // 用户代码段
     gdt_set_gate(4, 0, 0xFFFFFFFF, 0xF2, 0xCF); // 用户数据段
 
-    // TSS 初始化（传入高端栈顶）
-    // 注意：这里的 0x10 是内核数据段，stack_top 是我们在 boot.s 定义的
+    // TSS 初始化（传入栈顶）
+    // 注意：这里的 0x10 是内核数据段
     extern uint32_t stack_top;
     write_tss(5, 0x10, (uint32_t)&stack_top);
 
-    gdt_flush((uint32_t)&gdt_ptr);
+    gdt_flush((uint32_t)&gdt_ptr);//栈内先压4B参数，后压返回地址
     tss_flush(); // 告诉 CPU TSS 在 0x28 位置
 }
 
