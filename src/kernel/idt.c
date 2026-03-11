@@ -75,6 +75,7 @@ extern void isr128();  //128：系统调用
 
 extern void irq0();
 extern void irq1();
+extern void irq11();
 extern void irq14();
 
 
@@ -127,6 +128,7 @@ void init_idt() {
 
     idt_set_gate(32, (uint32_t)irq0, 0x08, 0x8E);
     idt_set_gate(33, (uint32_t)irq1, 0x08, 0x8E);
+    idt_set_gate(43, (uint32_t)irq11, 0x08, 0x8E);
     idt_set_gate(46, (uint32_t)irq14, 0x08, 0x8E);
     
 

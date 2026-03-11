@@ -23,5 +23,7 @@ void syscall_handler(registers_t *regs);
 #define SYS_MKDIR 13
 #define SYS_SHUTDOWN 14
 #define SYS_EXEC 15
+#define SYS_PING       16   
+#define SYS_NET_SET_IP 17 
 
 #endif

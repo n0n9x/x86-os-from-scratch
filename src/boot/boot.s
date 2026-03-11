@@ -211,6 +211,7 @@ isr_common_stub:
 
 IRQ 0, 32    ; 时钟 (Timer)
 IRQ 1, 33    ; 键盘 (Keyboard)
+IRQ 11, 43   ; 网卡 (RTL8139)
 IRQ 14, 46   ; 硬盘 (IDE Primary Channel)
 
 extern irq_handler

@@ -7,6 +7,7 @@
 #include <drivers/ide.h>
 #include <fs/fat.h>
 #include <drivers/io.h>
+#include <net/net.h> 
 
 void sys_print(char *s)
 {
@@ -234,6 +235,24 @@ static int sys_exec(const char *path, char **user_argv, int argc)
     return 0;
 }
 
+/* ★ 新增：ping 系统调用
+ *   ebx = 目标 IP（uint32_t，小端序，与 IP_MAKE 宏一致）
+ *   ecx = 发包数量（int，0 则默认 4）
+ *   返回 0 成功，-1 全部超时                                   */
+static int sys_ping(uint32_t dst_ip, int count)
+{
+    if (count <= 0) count = 4;
+    return ping(dst_ip, count, 2000);   /* 每包超时 2000 ms */
+}
+
+/* ★ 新增：动态设置 IP / 网关
+ *   ebx = 新 IP，ecx = 新网关（0 表示不改网关）               */
+static void sys_net_set_ip(uint32_t ip, uint32_t gw)
+{
+    net_set_ip(ip);
+    if (gw) net_set_gateway(gw);
+}
+
 static void *syscalls[] = {
     [SYS_PRINT] = (void *)sys_print,
     [SYS_SBRK] = (void *)sys_sbrk,
@@ -251,6 +270,8 @@ static void *syscalls[] = {
     [SYS_MKDIR] = (void *)sys_mkdir,
     [SYS_SHUTDOWN] = (void *)sys_shutdown,
     [SYS_EXEC] = (void *)sys_exec,
+    [SYS_PING]       = (void *)sys_ping,        /* ★ */
+    [SYS_NET_SET_IP] = (void *)sys_net_set_ip,  /* ★ */
 };
 
 // 3. 分发器
@@ -343,5 +364,18 @@ void syscall_handler(registers_t *regs)
         regs->eax = func((const char *)regs->ebx,
                          (char **)regs->ecx,
                          (int)regs->edx);
+    }
+    else if (num == SYS_PING)
+    {
+        /* ebx=目标IP, ecx=发包数 */
+        int (*func)(uint32_t, int) = (int (*)(uint32_t, int))handler;
+        regs->eax = (uint32_t)func(regs->ebx, (int)regs->ecx);
+    }
+    else if (num == SYS_NET_SET_IP)
+    {
+        /* ebx=新IP, ecx=新网关 */
+        void (*func)(uint32_t, uint32_t) = (void (*)(uint32_t, uint32_t))handler;
+        func(regs->ebx, regs->ecx);
+        regs->eax = 0;
     }
 }

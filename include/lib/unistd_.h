@@ -31,6 +31,8 @@ typedef unsigned int   size_t;
 #define SYS_MKDIR 13
 #define SYS_SHUTDOWN 14
 #define SYS_EXEC 15
+#define SYS_PING       16   
+#define SYS_NET_SET_IP 17
 
 uint32_t syscall_1(int num, uint32_t arg1);
 void syscall_0(int num, uint32_t arg1);
