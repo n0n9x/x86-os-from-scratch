@@ -1,0 +1,6 @@
+"filename", "language", "C", "C++", "comment", "blank", "total"
+"c:\msys64\home\N0ne\myos\include\drivers\io.h", "C++", 0, 10, 2, 0, 12
+"c:\msys64\home\N0ne\myos\src\drivers\rlt8139.c", "C", -13, 0, 10, 1, -2
+"c:\msys64\home\N0ne\myos\src\fs\fat.c", "C", 0, 0, 3, 0, 3
+"c:\msys64\home\N0ne\myos\src\net\net.c", "C", 33, 0, 0, -1, 32
+"Total", "-", 20, 10, 15, 0, 45

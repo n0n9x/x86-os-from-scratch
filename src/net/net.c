@@ -17,9 +17,9 @@
 #include <drivers/io.h>
 
 /* ── 本机配置 ─────────────────────────────────────────────────── */
-static uint32_t local_ip = IP_MAKE(10, 0, 2, 15); /* QEMU 默认用户网络 */
-static uint32_t gateway = IP_MAKE(10, 0, 2, 2);
-static uint8_t local_mac[6];
+static uint32_t local_ip = IP_MAKE(10, 0, 2, 15); // QEMU 默认用户网络ip
+static uint32_t gateway = IP_MAKE(10, 0, 2, 2);   // 默认网关
+static uint8_t local_mac[6];                      // 网卡地址
 
 /* ── ARP 缓存 ─────────────────────────────────────────────────── */
 static arp_entry_t arp_cache[ARP_CACHE_SIZE];
@@ -74,9 +74,9 @@ void net_set_gateway(uint32_t gw) { gateway = gw; }
 uint32_t net_get_ip(void) { return local_ip; }
 
 /* ════════════════════════════════════════════════════════════════
- *  校验和（Internet Checksum，RFC1071）
+ *  校验和（Internet Checksum，RFC1071）16位累加反码求和
  * ════════════════════════════════════════════════════════════════ */
-uint16_t net_checksum(const void *data, uint32_t len)
+uint16_t net_checksum(const void *data, uint32_t len) // 待计算的数据包 数据总字节数
 {
     const uint16_t *p = (const uint16_t *)data;
     uint32_t sum = 0;
@@ -132,24 +132,24 @@ static void arp_send_request(uint32_t target_ip)
     uint8_t frame[sizeof(eth_header_t) + sizeof(arp_packet_t)];
     memset(frame, 0, sizeof(frame));
 
-    eth_header_t *eth = (eth_header_t *)frame;
-    arp_packet_t *arp = (arp_packet_t *)(frame + sizeof(eth_header_t));
+    eth_header_t *eth = (eth_header_t *)frame;                          // 以太网帧
+    arp_packet_t *arp = (arp_packet_t *)(frame + sizeof(eth_header_t)); // arp数据包
 
     /* 以太网头：广播 */
     memset(eth->dst, 0xFF, 6);
     memcpy(eth->src, local_mac, 6);
-    eth->type = htons(ETHERTYPE_ARP);
+    eth->type = htons(ETHERTYPE_ARP); // x86是小端，网络传输是大端
 
     /* ARP 字段 */
-    arp->htype = htons(1);
-    arp->ptype = htons(ETHERTYPE_IP);
-    arp->hlen = 6;
-    arp->plen = 4;
-    arp->oper = htons(ARP_REQUEST);
-    memcpy(arp->sha, local_mac, 6);
-    arp->spa = local_ip;
+    arp->htype = htons(1);            // 硬件类型
+    arp->ptype = htons(ETHERTYPE_IP); // 协议类型 ipv4
+    arp->hlen = 6;                    // mac长度
+    arp->plen = 4;                    // ip长度
+    arp->oper = htons(ARP_REQUEST);   // arp请求
+    memcpy(arp->sha, local_mac, 6);   // 本机mac
+    arp->spa = local_ip;              // 本机ip
     memset(arp->tha, 0, 6);
-    arp->tpa = target_ip;
+    arp->tpa = target_ip; // 目标ip
 
     rtl8139_send(frame, (uint16_t)sizeof(frame));
 }
@@ -157,11 +157,12 @@ static void arp_send_request(uint32_t target_ip)
 /* 处理收到的 ARP 包 */
 void arp_handle(const uint8_t *payload, uint16_t len)
 {
+    // payload 以太网帧中剥离出来的 ARP 数据部分 len 长度
     if (len < sizeof(arp_packet_t))
         return;
     const arp_packet_t *arp = (const arp_packet_t *)payload;
 
-    /* 学习发送方 MAC */
+    // 收录缓存
     arp_cache_update(arp->spa, arp->sha);
 
     /* 如果是询问我的 IP，回复 */
@@ -202,7 +203,7 @@ int arp_resolve(uint32_t ip, uint8_t mac_out[6])
 
     /* 发 ARP request */
     arp_send_request(ip);
-    asm volatile("sti"); /* ★ 开中断，让网卡 IRQ 能进来 */
+    asm volatile("sti"); /* 开中断，让网卡 IRQ 能进来 */
     /* 轮询等待（最多约 500ms，以 timer tick 为单位） */
     extern uint32_t get_ticks(void);
     uint32_t start = get_ticks();
@@ -216,7 +217,7 @@ int arp_resolve(uint32_t ip, uint8_t mac_out[6])
         }
         asm volatile("pause");
     }
-    asm volatile("cli"); /* ★ 超时也要恢复 */
+    asm volatile("cli"); /* 超时也要恢复 */
     return -1;           /* 超时 */
 }
 
@@ -256,17 +257,16 @@ int ip_send(uint32_t dst_ip, uint8_t proto,
 
     /* ─ IP 头 ─ */
     ip_header_t *ip = (ip_header_t *)(frame + sizeof(eth_header_t));
-    ip->ver_ihl = 0x45; /* IPv4，头长=20字节 */
+    ip->ver_ihl = 0x45; // 版本4, 长度20字节
     ip->tos = 0;
-    ip->total_len = htons(ip_total);
-    ip->id = htons(ip_id_counter++);
+    ip->total_len = htons(ip_total); // 填入总长度
+    ip->id = htons(ip_id_counter++); // 填入id号
     ip->frag_off = 0;
-    ip->ttl = 64;
-    ip->proto = proto;
-    ip->checksum = 0;
-    ip->src_ip = local_ip;
-    ip->dst_ip = dst_ip;
-    ip->checksum = net_checksum(ip, sizeof(ip_header_t));
+    ip->ttl = 64;                                         // 生存时间，防止死循环
+    ip->proto = proto;                                    // 参数传递的上层协议号 (1-ICMP, 17-UDP)
+    ip->src_ip = local_ip;                                // 源ip地址
+    ip->dst_ip = dst_ip;                                  // 目的ip地址
+    ip->checksum = net_checksum(ip, sizeof(ip_header_t)); // 计算校验和
 
     /* ─ 载荷 ─ */
     memcpy(frame + sizeof(eth_header_t) + sizeof(ip_header_t), payload, payload_len);
@@ -280,20 +280,20 @@ int ip_send(uint32_t dst_ip, uint8_t proto,
  *  ICMP
  * ════════════════════════════════════════════════════════════════ */
 
-/* 发送 ICMP Echo Request */
+/* 发送 ICMP Echo Request /ICMP回显请求*/
 int icmp_send_echo(uint32_t dst_ip, uint16_t id, uint16_t seq)
 {
     /* ICMP 头 + 16字节数据 */
-    const uint16_t data_len = 16;
-    uint16_t icmp_len = sizeof(icmp_header_t) + data_len;
-    uint8_t buf[sizeof(icmp_header_t) + 16];
+    const uint16_t data_len = 16;                         // icmp的数据载荷
+    uint16_t icmp_len = sizeof(icmp_header_t) + data_len; // 整个 ICMP 报文的总长度
+    uint8_t buf[sizeof(icmp_header_t) + 16];              // 数据缓冲区
 
     icmp_header_t *icmp = (icmp_header_t *)buf;
-    icmp->type = ICMP_ECHO_REQUEST;
+    icmp->type = ICMP_ECHO_REQUEST; // 回显请求
     icmp->code = 0;
     icmp->checksum = 0;
-    icmp->id = htons(id);
-    icmp->seq = htons(seq);
+    icmp->id = htons(id);   // 标识符
+    icmp->seq = htons(seq); // 序列号
 
     /* 填充载荷：简单的 0xAB 重复 */
     uint8_t *data = buf + sizeof(icmp_header_t);
@@ -308,6 +308,7 @@ int icmp_send_echo(uint32_t dst_ip, uint16_t id, uint16_t seq)
 /* 处理收到的 ICMP 包 */
 static void icmp_handle(const ip_header_t *ip, const uint8_t *payload, uint16_t len)
 {
+    // ip ip数据包头部 payload icmp原始数据
     if (len < sizeof(icmp_header_t))
         return;
     const icmp_header_t *icmp = (const icmp_header_t *)payload;
@@ -342,10 +343,12 @@ static void icmp_handle(const ip_header_t *ip, const uint8_t *payload, uint16_t 
  * ════════════════════════════════════════════════════════════════ */
 static void ip_handle(const uint8_t *payload, uint16_t len)
 {
+    // payload 完整的ip数据包
     if (len < sizeof(ip_header_t))
         return;
     const ip_header_t *ip = (const ip_header_t *)payload;
 
+    //计算包头长度
     uint8_t ihl = (ip->ver_ihl & 0x0F) * 4;
     if (ihl < 20 || ihl > len)
         return;
@@ -354,9 +357,10 @@ static void ip_handle(const uint8_t *payload, uint16_t len)
     if (ip->dst_ip != local_ip)
         return;
 
-    const uint8_t *upper = payload + ihl;
+    const uint8_t *upper = payload + ihl;//数据起始地址
     uint16_t upper_len = (uint16_t)(ntohs(ip->total_len) - ihl);
 
+    //分发协议
     switch (ip->proto)
     {
     case IP_PROTO_ICMP:
@@ -372,6 +376,7 @@ static void ip_handle(const uint8_t *payload, uint16_t len)
  * ════════════════════════════════════════════════════════════════ */
 void net_receive(const uint8_t *frame, uint16_t len)
 {
+    // frame 原始以太网帧
     if (len < sizeof(eth_header_t))
         return;
     const eth_header_t *eth = (const eth_header_t *)frame;
@@ -379,6 +384,7 @@ void net_receive(const uint8_t *frame, uint16_t len)
     const uint8_t *payload = frame + sizeof(eth_header_t);
     uint16_t payload_len = (uint16_t)(len - sizeof(eth_header_t));
 
+    //协议分发
     switch (ntohs(eth->type))
     {
     case ETHERTYPE_ARP:
@@ -410,6 +416,7 @@ static void print_ip(uint32_t ip)
 
 int ping(uint32_t dst_ip, int count, uint32_t timeout_ms)
 {
+    //dst_ip 目标ip地址     count 探测包数目    timeout_ms 超时时间
     extern uint32_t get_ticks(void);
 
     terminal_writestring("PING ");
@@ -434,11 +441,11 @@ int ping(uint32_t dst_ip, int count, uint32_t timeout_ms)
         sent++;
 
         /* 等待应答 */
-        asm volatile("sti"); /* ★ */
+        asm volatile("sti"); 
         uint32_t deadline = get_ticks() + timeout_ms;
         while (!ping_got_reply && get_ticks() < deadline)
             asm volatile("pause");
-        asm volatile("cli"); /* ★ */
+        asm volatile("cli"); 
 
         uint32_t t1 = get_ticks();
         uint32_t rtt = t1 - t0;

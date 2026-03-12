@@ -19,21 +19,22 @@
 #include <net/net.h>
 #include <mm/pmm.h>
 
-/* ── 静态状态 ──────────────────────────────────────────────────── */
-static uint16_t rtl_iobase = 0; /* I/O 端口基地址 */
-static uint8_t rtl_mac[6];      /* 本机 MAC */
+static uint16_t rtl_iobase = 0; // I/O 端口基地址
+static uint8_t rtl_mac[6];      // 本机 MAC
 
-/* 静态分配，避免 kmalloc 跨页问题 */
+// 接收环形缓冲区
 static uint8_t rx_buf_static[RTL_RX_BUF_SIZE] __attribute__((aligned(4096)));
-static uint8_t tx_buf_static[RTL_TX_BUF_COUNT][RTL_TX_BUF_SIZE] __attribute__((aligned(4096)));
 
+// 发送缓冲区数组，共4个
+static uint8_t tx_buf_static[RTL_TX_BUF_COUNT][RTL_TX_BUF_SIZE] __attribute__((aligned(4096)));
+// 对应的下一个可用索引
+static int tx_next = 0;
+
+// 指向上述静态空间的指针，方便在函数间传递
 static uint8_t *rx_buf = NULL;
 static uint8_t *tx_buf[RTL_TX_BUF_COUNT];
-static uint16_t rx_offset = 0; /* 当前读取偏移 */
+static uint16_t rx_offset = 0; // 当前读取偏移
 
-/* 4个发送缓冲区 + 对应的下一个可用索引 */
-static uint8_t *tx_buf[RTL_TX_BUF_COUNT];
-static int tx_next = 0;
 
 /* ── PCI 读写 ─────────────────────────────────────────────────── */
 static uint32_t pci_read32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset)
@@ -43,8 +44,7 @@ static uint32_t pci_read32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offse
     return inl(PCI_CONFIG_DATA);
 }
 
-static void pci_write32(uint8_t bus, uint8_t dev, uint8_t func,
-                        uint8_t offset, uint32_t val)
+static void pci_write32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint32_t val)
 {
     uint32_t addr = (1u << 31) | ((uint32_t)bus << 16) | ((uint32_t)dev << 11) | ((uint32_t)func << 8) | (offset & 0xFC);
     outl(PCI_CONFIG_ADDR, addr);
@@ -60,10 +60,10 @@ static uint16_t pci_find_rtl8139(uint8_t *irq_out)
         for (uint8_t dev = 0; dev < 32; dev++)
         {
             uint32_t id = pci_read32((uint8_t)bus, dev, 0, 0);
-            if (id == 0xFFFFFFFF)
+            if (id == 0xFFFFFFFF) // 这个位置没有插任何设备
                 continue;
-            uint16_t vendor = id & 0xFFFF;
-            uint16_t device = id >> 16;
+            uint16_t vendor = id & 0xFFFF; // 低16位 厂商
+            uint16_t device = id >> 16;    // 高16位 型号
             if (vendor == RTL8139_VENDOR_ID && device == RTL8139_DEVICE_ID)
             {
                 /* 读取 BAR0（I/O 空间） */
@@ -71,11 +71,11 @@ static uint16_t pci_find_rtl8139(uint8_t *irq_out)
                 uint16_t iobase = (uint16_t)(bar0 & 0xFFFC);
 
                 /* 使能 Bus Master + I/O Space */
-                uint32_t cmd = pci_read32((uint8_t)bus, dev, 0, 0x04);
-                cmd |= 0x05; /* I/O Enable | Bus Master */
+                uint32_t cmd = pci_read32((uint8_t)bus, dev, 0, 0x04);//Command 寄存器
+                cmd |= 0x05; // I/O Enable | Bus Master 开启DMA
                 pci_write32((uint8_t)bus, dev, 0, 0x04, cmd);
 
-                /* 读取 IRQ */
+                /* 读取 IRQ 号*/
                 uint32_t irq_line = pci_read32((uint8_t)bus, dev, 0, 0x3C);
                 if (irq_out)
                     *irq_out = (uint8_t)(irq_line & 0xFF);
@@ -109,6 +109,7 @@ int rtl8139_init(void)
     outb(rtl_iobase + RTL_CONFIG1, 0x00);
 
     /* 2. 软复位 */
+    //清空网卡内部的所有缓冲区和状态机
     outb(rtl_iobase + RTL_CMD, RTL_CMD_RST);
     while (inb(rtl_iobase + RTL_CMD) & RTL_CMD_RST)
     {
@@ -127,24 +128,24 @@ int rtl8139_init(void)
     }
     terminal_putchar('\n');
 
-    /* 4. 使用静态缓冲区，物理地址连续有保证 */
-    rx_buf = rx_buf_static;
+    // 4. 使用静态缓冲区，网卡硬件要求接收数据的缓冲区在物理内存上必须是连续的
+    rx_buf = rx_buf_static;//接收环形缓冲区
     memset(rx_buf, 0, RTL_RX_BUF_SIZE);
 
     for (int i = 0; i < RTL_TX_BUF_COUNT; i++)
     {
-        tx_buf[i] = tx_buf_static[i];
+        tx_buf[i] = tx_buf_static[i];//发送缓冲区数组
         memset(tx_buf[i], 0, RTL_TX_BUF_SIZE);
     }
 
-    /* 5. 写入物理地址 */
+    // 5. 写入内存物理地址 /DMA配置
     uint32_t rx_phys = VIRT_TO_PHYS((uint32_t)rx_buf);
     outl(rtl_iobase + RTL_RBSTART, rx_phys);
 
-    /* 6. 配置接收 */
+    // 6. 配置接收  RTL_RCR_VAL决定了网卡如何进行帧过滤
     outl(rtl_iobase + RTL_RCR, RTL_RCR_VAL);
 
-    /* 7. 配置发送 */
+    // 7. 配置发送  IFG两个数据包发送之间的最小时间间隔
     outl(rtl_iobase + RTL_TCR, (6 << 8));
 
     /* 8. 开启接收+发送 */
@@ -171,18 +172,23 @@ int rtl8139_send(const uint8_t *data, uint16_t len)
         return -1;
 
     /* 等待当前发送描述符的 OWN 位为1（DMA 已完成，CPU 可写） */
-    uint16_t tsd_reg = RTL_TSD0 + tx_next * 4;
-    uint16_t tsad_reg = RTL_TSAD0 + tx_next * 4;
+    uint16_t tsd_reg = RTL_TSD0 + tx_next * 4;//存放状态位、包长度及阈值
+    uint16_t tsad_reg = RTL_TSAD0 + tx_next * 4;//存放待发送数据的物理地址
 
     /* 轮询等待 OWN */
     uint32_t timeout = 100000;
     while (!(inl(rtl_iobase + tsd_reg) & RTL_TSD_OWN) && --timeout)
         ;
-    if (timeout == 0)
+    if (timeout == 0)//超时
         return -1;
 
     /* 复制数据到发送缓冲区 */
     memcpy(tx_buf[tx_next], data, len);
+    /*
+    以太网帧最小长度为 64 字节（含 4 字节 CRC）
+    由于 RTL8139 硬件会自动计算并附加 CRC
+    因此驱动层传入的数据必须至少补齐至 60 字节
+    */
     if (len < 60)
     {
         memset(tx_buf[tx_next] + len, 0, 60 - len);
@@ -207,18 +213,23 @@ void rtl8139_handler(void)
         return;
 
     uint16_t isr = inw(rtl_iobase + RTL_ISR);
-    /* 清除中断状态（写1清零） */
+    // 清除中断状态（写1清零） 
     outw(rtl_iobase + RTL_ISR, isr);
 
     /* 接收成功 */
     if (isr & RTL_ISR_ROK)
     {
+        //检查缓冲区是否为空
         while (!(inb(rtl_iobase + RTL_CMD) & 0x01))
         {
-            /* 直接用 CAPR+16 作为读取位置 */
+            //定位当前数据包
+            // 读指针寄存器
             uint16_t capr = inw(rtl_iobase + RTL_CAPR);
+            // 直接用 CAPR读指针寄存器+16 作为读取位置 
             uint16_t cur = (uint16_t)((capr + 16) & 0x1FFF); /* % 8192 */
 
+
+            //硬件包头指针  内存布局：hdr[0]状态 hdr[1]长度 + 以太网帧
             uint16_t *hdr = (uint16_t *)(rx_buf + cur);
             uint16_t rx_len = hdr[1];
 
@@ -227,6 +238,7 @@ void rtl8139_handler(void)
 
             uint8_t *frame = (uint8_t *)(rx_buf + cur + 4);
             uint16_t frame_len = rx_len - 4;
+            //分发数据包
             net_receive(frame, frame_len);
 
             /* 更新 CAPR */

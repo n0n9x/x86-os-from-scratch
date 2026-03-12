@@ -31,6 +31,7 @@ void irq_handler(registers_t *regs)
         pic_send_eoi(1);
         return;
     }
+    // 处理网卡中断
     if (regs->int_no == 43)
     {
         rtl8139_handler();
