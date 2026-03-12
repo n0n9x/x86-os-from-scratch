@@ -23,6 +23,18 @@ static inline uint16_t inw(uint16_t port) {
 static inline void outw(uint16_t port, uint16_t data) {
     asm volatile ("outw %0, %1" : : "a"(data), "Nd"(port));
 }
+// 向port端口发送4字节数据
+static inline void outl(uint16_t port, uint32_t val)
+{
+    asm volatile("outl %0, %1" ::"a"(val), "Nd"(port));
+}
+// 从port端口读取4字节数据
+static inline uint32_t inl(uint16_t port)
+{
+    uint32_t ret;
+    asm volatile("inl %1, %0" : "=a"(ret) : "Nd"(port));
+    return ret;
+}
 // 0x80是空闲端口，强制等待
 static inline void io_wait(void) {
     outb(0x80, 0);

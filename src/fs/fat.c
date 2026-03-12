@@ -11,10 +11,10 @@ uint32_t data_start_lba;   // 数据区起始扇区
 uint32_t root_dir_sectors; // 根目录区占用的扇区数
 // 用静态缓冲区持久保存引导扇区，避免 bpb 指向栈上的临时变量（野指针）
 static uint8_t bpb_buf[512];
-fat_bpb_t *bpb;
+fat_bpb_t *bpb; // 全局bpb
 
 /*
-保留区 fat表区 根目录区 数据区
+    保留区 fat表区 根目录区 数据区
 */
 void fat_init()
 {
@@ -133,11 +133,11 @@ int fat_find_entry_in_dir(uint16_t start_cluster, const char *name, fat_dirent_t
             for (int i = 0; i < 16; i++) // 一个扇区有16个目录项
             {
                 if (dir[i].name[0] == 0x00)
-                    return -1; // 目录结束
+                    return -1; // 空文件
                 if ((uint8_t)dir[i].name[0] == 0xE5)
                     continue; // 已删除
 
-                if (memcmp(dir[i].name, fat_name, 11) == 0)
+                if (memcmp(dir[i].name, fat_name, 11) == 0)//找到了
                 {
                     if (out_dirent)
                         *out_dirent = dir[i];
@@ -190,9 +190,9 @@ int fat_path_to_dirent(const char *path, fat_dirent_t *out_dirent, uint32_t *out
     if (!path || path[0] != '/')
         return -1;
     if (strcmp(path, "/") == 0)
-        return -1; // 根目录没有 dirent 结构
+        return -1; // 根目录区是一个区域，不是文件项，没有 dirent 结构
 
-    uint16_t current_dir_cluster = 0;
+    uint16_t current_dir_cluster = 0;//当前目录的簇号，起始为根目录
     fat_dirent_t current_entry; // 当前找到的文件/目录
     char segment[13];           // 存放路径上单个目录名
     const char *ptr = path + 1;
@@ -270,7 +270,7 @@ uint16_t fat_allocate_cluster()
     for (uint32_t s = 0; s < bpb->sectors_per_fat; s++)
     {
         ide_read_sector(fat_start_lba + s, fat_buf);
-        uint16_t *table = (uint16_t *)fat_buf;
+        uint16_t *table = (uint16_t *)fat_buf; //一个fat表项 2B
 
         for (int i = 0; i < 256; i++) // 一个扇区有256个fat项
         {
@@ -290,7 +290,7 @@ uint16_t fat_allocate_cluster()
     return 0xFFFF; // 磁盘已满
 }
 
-//在 parent_luster目录里创建新文件/目录
+// 在 parent_luster目录里创建新文件/目录
 int fat_add_entry(uint16_t parent_cluster, const char *fat_name, uint8_t attr, uint16_t first_cluster)
 {
     uint8_t sector_buf[512];
@@ -304,7 +304,7 @@ int fat_add_entry(uint16_t parent_cluster, const char *fat_name, uint8_t attr, u
             ide_read_sector(sector_lba, sector_buf);
             fat_dirent_t *dir = (fat_dirent_t *)sector_buf;
 
-            for (int i = 0; i < 16; i++)//一个目录项32B，一个扇区512/32=16个目录项
+            for (int i = 0; i < 16; i++) // 一个目录项32B，一个扇区512/32=16个目录项
             {
                 uint8_t head = (uint8_t)dir[i].name[0];
                 if (head == 0x00 || head == 0xE5)
@@ -418,26 +418,29 @@ static file_loc_t fat_get_file_location(const char *path)
 
     if (fat_path_to_dirent(path, &dirent, &lba, &idx) == 0)
     {
+        //该文件目录项所在的磁盘物理扇区地址 (LBA)
         loc.sector_lba = lba;
+        //在上述扇区内的目录项索引
         loc.entry_index = idx;
+        //文件的首簇号，指向文件实际数据存储的起始位置
         loc.first_cluster = dirent.first_cluster_low;
     }
-    return loc;
+    return loc;//目录项信息+文件数据信息
 }
 
 // 重构后的通用写入函数，从第offset数据开始写入len长度的数据
 int fat_write_file_at(const char *path, uint8_t *data, uint32_t len, uint32_t offset)
 {
-    file_loc_t loc = fat_get_file_location(path);//先定位文件
-    if (loc.sector_lba == 0)//文件未找到，创建文件
+    file_loc_t loc = fat_get_file_location(path); // 先定位文件
+    if (loc.sector_lba == 0)                      // 文件未找到，创建文件
     {
         if (fat_create_file(path) < 0)
             return -1;
         loc = fat_get_file_location(path);
     }
-    //文件起始扇区
+    // 文件起始扇区
     uint16_t current_cluster = loc.first_cluster;
-    //当前已写入的数据量
+    // 当前已写入的数据量
     uint32_t current_offset = 0;
 
     // 1. 寻找或跳过到指定的 offset 所在的簇
@@ -454,7 +457,7 @@ int fat_write_file_at(const char *path, uint8_t *data, uint32_t len, uint32_t of
     while (data_pos < len)
     {
         uint32_t offset_in_cluster = (offset + data_pos) % 512;
-        uint32_t chunk = 512 - offset_in_cluster;//写入多少数据填满这个扇区
+        uint32_t chunk = 512 - offset_in_cluster; // 写入多少数据填满这个扇区
         if (chunk > (len - data_pos))
             chunk = len - data_pos;
 
@@ -494,8 +497,8 @@ int fat_write_file_at(const char *path, uint8_t *data, uint32_t len, uint32_t of
     uint8_t dir_buf[512];
     ide_read_sector(loc.sector_lba, dir_buf);
     fat_dirent_t *dir = (fat_dirent_t *)dir_buf;
-    uint32_t oldsize=dir[loc.entry_index].file_size;
-    //写入后的文件总大小
+    uint32_t oldsize = dir[loc.entry_index].file_size;
+    // 写入后的文件总大小
     uint32_t final_size = (offset + len > oldsize) ? (offset + len) : oldsize;
     if (final_size > oldsize)
     {
@@ -561,10 +564,10 @@ static void list_contents_at_cluster(uint16_t start_cluster)
             fat_dirent_t *dir = (fat_dirent_t *)buf;
             for (int i = 0; i < 16; i++)
             {
-                //空文件
+                // 空文件
                 if (dir[i].name[0] == 0x00)
                     return;
-                //已删除文件
+                // 已删除文件
                 if ((uint8_t)dir[i].name[0] == 0xE5 || dir[i].attr == 0x08)
                     continue;
 

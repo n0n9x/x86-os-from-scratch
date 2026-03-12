@@ -19,18 +19,6 @@
 #include <net/net.h>
 #include <mm/pmm.h>
 
-/* outl / inl 封装（io.h 里只有 outb/inb/outw/inw） */
-static inline void outl(uint16_t port, uint32_t val)
-{
-    asm volatile("outl %0, %1" ::"a"(val), "Nd"(port));
-}
-static inline uint32_t inl(uint16_t port)
-{
-    uint32_t ret;
-    asm volatile("inl %1, %0" : "=a"(ret) : "Nd"(port));
-    return ret;
-}
-
 /* ── 静态状态 ──────────────────────────────────────────────────── */
 static uint16_t rtl_iobase = 0; /* I/O 端口基地址 */
 static uint8_t rtl_mac[6];      /* 本机 MAC */
@@ -232,7 +220,6 @@ void rtl8139_handler(void)
             uint16_t cur = (uint16_t)((capr + 16) & 0x1FFF); /* % 8192 */
 
             uint16_t *hdr = (uint16_t *)(rx_buf + cur);
-            uint16_t rx_status = hdr[0];
             uint16_t rx_len = hdr[1];
 
             if (rx_len == 0 || rx_len > 1518 + 4)

@@ -16,26 +16,26 @@ typedef struct
 {
     uint8_t jmp[3];
     char oem_id[8];
-    uint16_t bytes_per_sector;
-    uint8_t sectors_per_cluster;
-    uint16_t reserved_sectors;
+    uint16_t bytes_per_sector;   // 每个扇区的字节数（通常为 512）
+    uint8_t sectors_per_cluster; // 每个簇包含的扇区数（必须是 2 的整数次幂，如 1, 2, 4...）
+    uint16_t reserved_sectors;   // 保留扇区数（从磁盘起始到第一个 FAT 表之前的扇区数，包含引导扇区本身）
     uint8_t fat_count;
-    uint16_t root_entries;
-    uint16_t total_sectors_small;
+    uint16_t root_entries;          // 根目录最大条目数（FAT16 特有，决定了根目录下最多能放多少个文件/目录）
+    uint16_t total_sectors_small;   // 总扇区数（如果值大于 65535，此项为 0，需查看偏移 32 处的 large 字段）
     uint8_t media_type;
-    uint16_t sectors_per_fat;
+    uint16_t sectors_per_fat;// 每个 FAT 表占用的扇区数
 } __attribute__((packed)) fat_bpb_t;
 
 // 目录项结构 (32 字节)
 typedef struct
 {
-    char name[11];             // 文件名 (8字节) + 扩展名 (3字节)，不包含点号 '.'
-    uint8_t attr;              // 文件属性 (0x10目录, 0x20归档, 0x01只读, 0x02隐藏等)
-    uint8_t reserved;          // 保留位，通常设为 0
-    uint8_t create_time_ms;    // 文件创建时间的毫秒部分 (0-199)
-    uint16_t create_time;      // 文件创建时间 (时:分:秒，按位域编码)
-    uint16_t create_date;      // 文件创建日期 (年-月-日，按位域编码)
-    uint16_t last_access_date; // 最后访问日期
+    char name[11];               // 文件名 (8字节) + 扩展名 (3字节)，不包含点号 '.'
+    uint8_t attr;                // 文件属性 (0x10目录, 0x20归档, 0x01只读, 0x02隐藏等)
+    uint8_t reserved;            // 保留位，通常设为 0
+    uint8_t create_time_ms;      // 文件创建时间的毫秒部分 (0-199)
+    uint16_t create_time;        // 文件创建时间 (时:分:秒，按位域编码)
+    uint16_t create_date;        // 文件创建日期 (年-月-日，按位域编码)
+    uint16_t last_access_date;   // 最后访问日期
     uint16_t first_cluster_high; // 簇号的高16位 (在 FAT16 中始终为 0，FAT32 才会用到)
     uint16_t last_modify_time;   // 最后修改时间
     uint16_t last_modify_date;   // 最后修改日期
@@ -46,8 +46,8 @@ typedef struct
 // 文件位置元数据，用于快速定位目录项
 typedef struct
 {
-    uint32_t sector_lba;   // 该文件目录项所在的磁盘物理扇区地址 (LBA)
-    int entry_index;       // 在上述扇区内的目录项索引 (0-15，因为一个扇区512字节/32字节=16项)
+    uint32_t sector_lba;    // 该文件目录项所在的磁盘物理扇区地址 (LBA)
+    int entry_index;        // 在上述扇区内的目录项索引 (0-15，因为一个扇区512字节/32字节=16项)
     uint16_t first_cluster; // 文件的首簇号，指向文件实际数据存储的起始位置
 } file_loc_t;
 
