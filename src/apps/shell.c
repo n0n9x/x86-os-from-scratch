@@ -314,7 +314,8 @@ void shell_main()
                         p++;
                 }
 
-                argv[argc++] = "/crt0.o";
+                argv[argc++] = "/ustart.o";
+                argv[argc++] = "/smain.o";
                 argv[argc++] = "/mylibc.o";
                 argv[argc++] = "/sysarch.o";
                 argv[argc++] = "-nostdlib";

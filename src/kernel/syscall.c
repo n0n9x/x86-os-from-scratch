@@ -7,7 +7,7 @@
 #include <drivers/ide.h>
 #include <fs/fat.h>
 #include <drivers/io.h>
-#include <net/net.h> 
+#include <net/net.h>
 
 void sys_print(char *s)
 {
@@ -199,10 +199,10 @@ static int sys_exec(const char *path, char **user_argv, int argc)
 {
     extern task_t *load_elf_with_args(const char *path, char **argv, int argc);
 
-// 把用户态的 argv 字符串全部复制到内核缓冲区
-// 避免 load_elf_with_args 执行过程中用户栈被切换或失效
-#define MAX_EXEC_ARGS 16
-#define MAX_ARG_LEN 256
+    // 把用户态的 argv 字符串全部复制到内核缓冲区
+    // 避免 load_elf_with_args 执行过程中用户栈被切换或失效
+    #define MAX_EXEC_ARGS 16
+    #define MAX_ARG_LEN 256
     static char arg_bufs[MAX_EXEC_ARGS][MAX_ARG_LEN];
     static char *kargv[MAX_EXEC_ARGS + 1];
 
@@ -225,7 +225,8 @@ static int sys_exec(const char *path, char **user_argv, int argc)
     kargv[argc] = NULL;
 
     task_t *child = load_elf_with_args(kargv[0], kargv, argc);
-    if (!child) return -1;
+    if (!child)
+        return -1;
 
     // 设置父子关系，阻塞当前任务等待子进程退出
     child->parent = current_task;
@@ -241,8 +242,9 @@ static int sys_exec(const char *path, char **user_argv, int argc)
  *   返回 0 成功，-1 全部超时                                   */
 static int sys_ping(uint32_t dst_ip, int count)
 {
-    if (count <= 0) count = 4;
-    return ping(dst_ip, count, 2000);   /* 每包超时 2000 ms */
+    if (count <= 0)
+        count = 4;
+    return ping(dst_ip, count, 2000); /* 每包超时 2000 ms */
 }
 
 /* ★ 新增：动态设置 IP / 网关
@@ -250,7 +252,8 @@ static int sys_ping(uint32_t dst_ip, int count)
 static void sys_net_set_ip(uint32_t ip, uint32_t gw)
 {
     net_set_ip(ip);
-    if (gw) net_set_gateway(gw);
+    if (gw)
+        net_set_gateway(gw);
 }
 
 static void *syscalls[] = {
@@ -270,8 +273,8 @@ static void *syscalls[] = {
     [SYS_MKDIR] = (void *)sys_mkdir,
     [SYS_SHUTDOWN] = (void *)sys_shutdown,
     [SYS_EXEC] = (void *)sys_exec,
-    [SYS_PING]       = (void *)sys_ping,        /* ★ */
-    [SYS_NET_SET_IP] = (void *)sys_net_set_ip,  /* ★ */
+    [SYS_PING] = (void *)sys_ping,             /* ★ */
+    [SYS_NET_SET_IP] = (void *)sys_net_set_ip, /* ★ */
 };
 
 // 3. 分发器

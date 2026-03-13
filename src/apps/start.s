@@ -1,3 +1,5 @@
+
+;仅负责启动shell
 [GLOBAL _start]
 _start:
     xor ebp, ebp

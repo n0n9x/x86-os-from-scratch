@@ -28,7 +28,7 @@ SHELL_OBJ = $(BINDIR)/apps/shell.o $(BINDIR)/apps/start.o
 
 MYLIBC_OBJS = $(BINDIR)/lib/mylibc.o $(BINDIR)/lib/syscall_arch.o
 HELLO_ELF   = hello.elf
-HELLO_OBJS  = $(BINDIR)/apps/hello.o $(BINDIR)/apps/crt0.o
+HELLO_OBJS  = $(BINDIR)/apps/hello.o $(BINDIR)/apps/ustart.o $(BINDIR)/apps/start_main.o
 
 # ── 新增：ping ──────────────────────────────────────────────────────
 PING_ELF  = ping.elf
@@ -44,7 +44,7 @@ $(TARGET): $(KERNEL_OBJS)
 	@echo "--- 正在链接内核 ---"
 	$(CC) $(LDFLAGS_KERN) -o $(TARGET) $(KERNEL_OBJS)
 
-crt0.o: src/apps/crt0.c
+start_main.o: src/apps/start_main.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # 5. 链接用户 ELF
@@ -70,7 +70,7 @@ $(BINDIR)/%.o: $(SRCDIR)/%.s
 	$(AS) -f elf32 -g -F dwarf $< -o $@
 
 # 7. 磁盘镜像（依赖加入 ping.elf，镜像内容加入 ping.elf）
-$(DISK_IMG): $(USER_ELF) $(HELLO_ELF) $(PING_ELF) crt0.o
+$(DISK_IMG): $(USER_ELF) $(HELLO_ELF) $(PING_ELF) start_main.o
 	@echo "--- 正在生成并格式化磁盘镜像 ---"
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=32
 	mkfs.fat -F 16 -s 1 $(DISK_IMG)
@@ -87,8 +87,8 @@ $(DISK_IMG): $(USER_ELF) $(HELLO_ELF) $(PING_ELF) crt0.o
 	mcopy -i $(DISK_IMG) src/apps/hello.c         ::/hello.c
 	mcopy -i $(DISK_IMG) tinycc/include/tccdefs.h ::/include/tccdefs.h
 	nasm -f elf32 src/apps/ustart.s -o ustart.o
-	mcopy -i $(DISK_IMG) ustart.o ::/ustart.o
-	mcopy -i $(DISK_IMG) crt0.o   ::/crt0.o
+	mcopy -i $(DISK_IMG) ustart.o      ::/ustart.o
+	mcopy -i $(DISK_IMG) start_main.o  ::/smain.o
 	mcopy -i $(DISK_IMG) $(BINDIR)/lib/mylibc.o       ::/mylibc.o
 	mcopy -i $(DISK_IMG) $(BINDIR)/lib/syscall_arch.o ::/sysarch.o
 	@echo "--- 检查镜像内容 ---"
@@ -113,4 +113,4 @@ debug: all
 		-d int,cpu_reset -D qemu.log -monitor stdio
 
 clean:
-	rm -rf $(BINDIR) $(TARGET) $(USER_ELF) $(HELLO_ELF) $(PING_ELF) $(DISK_IMG) qemu.log
+	rm -rf $(BINDIR) $(TARGET) $(USER_ELF) $(HELLO_ELF) $(PING_ELF) $(DISK_IMG) qemu.log ustart.o start_main.o

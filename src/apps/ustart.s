@@ -1,5 +1,5 @@
 ; src/apps/ustart.s
-; 用户程序通用入口，NASM 语法
+; elf用户程序通用入口，NASM 语法
 ; 栈布局（由 elf.c 的 load_elf_with_args 布置）：
 ;   [esp+0] = argc
 ;   [esp+4] = argv[0]
